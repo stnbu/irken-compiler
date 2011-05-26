@@ -91,6 +91,25 @@ indent (int n)
   }
 }
 
+typedef struct _tuple2
+{
+  header tc;
+  struct _tuple * next;
+  struct _tuple * next8;
+  object * val[0];
+} pxll_tuple2;
+
+pxll_int
+get_lenv_depth (pxll_tuple2 * lenv)
+{
+  int count = 0;
+  while (lenv != PXLL_NIL) {
+    count++;
+    lenv = lenv->next;
+  }
+  return count;
+}
+
 void print_string (object * ob, int quoted);
 void print_list (pxll_pair * l);
 

@@ -164,7 +164,7 @@
 	 (insn:close name body k)		   -> (begin (emit-close name body (k/target k)) k)
 	 (insn:varref d i k)			   -> (begin (emit-varref d i (k/target k)) k)
 	 (insn:varset d i v k)			   -> (begin (emit-varset d i v) k)
-	 (insn:new-env size top? k)		   -> (begin (emit-new-env size top? (k/target k)) k)
+	 (insn:new-env size d top? k)		   -> (begin (emit-new-env size d top? (k/target k)) k)
 	 (insn:alloc tag size k)		   -> (begin (emit-alloc tag size (k/target k)) k)
 	 (insn:store off arg tup i k)		   -> (begin (emit-store off arg tup i) k)
 	 (insn:invoke name fun args k)		   -> (begin (emit-call name fun args k) k)
@@ -264,7 +264,6 @@
 	;; emit the function definition
 	(o.write (format proc-label ":"))
 	(o.indent)
-	;; XXX context flag for this...
 	(if context.options.trace
 	    (o.write (format "stack_depth_indent(k); fprintf (stderr, \">> [%d] " proc-label "\\n\", __LINE__);")))
 	;; profile
@@ -288,27 +287,52 @@
 	(o.write (format "r" (int target) "[1] = &&" proc-label "; r" (int target) "[2] = lenv;"))
 	))
 
+    (define (make-path n)
+      (let loop ((n n)
+		 (path '()))
+	(cond ((= n 0) (format "((object" (repeat (+ (length path) 2) "*") ")lenv)" (joins path)))
+	      ((< n 4) (loop (- n 1) (list:cons "[1]" path)))
+	      (else (loop (- n 4) (list:cons "[2]" path))))))
+
     (define (emit-varref d i target)
       (if (>= target 0)
 	  (let ((src 
 		 (if (= d -1)
-		     (format "top[" (int (+ 2 i)) "];") ;; the +2 is to skip the header and next ptr
+		     (format "top[" (int (+ 3 i)) "];") ;; the +2 is to skip the header and next ptr
 		     ;;(format "varref (" (int d) "," (int i) ");")
-		     (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]") "[" (int (+ i 2)) "];")
-		     )))
+		     (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]") "[" (int (+ i 3)) "];"))))
+;; 		 (cond ((= d -1)
+;; 			(format "top[" (int (+ 3 i)) "];")) ;; the +3 is to skip the header and next ptrs
+;; 		       (else
+;; 			(let ((f0 (make-path d))
+;; 			      (f1 (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]"))))
+;; 			  (o.write (format "if ((" f0 ") != (" f1 ")) abort();"))
+;; 			  (format f0 "[" (int (+ i 3)) "];")))
+;; 		     )))
 	    (o.write (format "r" (int target) " = " src)))))
 
     (define (emit-varset d i v)
       (if (= d -1)
-	  (o.write (format "top[" (int (+ 2 i)) "] = r" (int v) ";"))
+	  (o.write (format "top[" (int (+ 3 i)) "] = r" (int v) ";"))
 	  ;;(o.write (format "varset (" (int d) ", " (int i) ", r" (int v) ");"))
-	  (o.write (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]") "[" (int (+ i 2)) "] = r" (int v) ";"))
+	  (o.write (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]") "[" (int (+ i 3)) "] = r" (int v) ";"))
 	  ))
 
-    (define (emit-new-env size top? target)
-      (o.write (format "r" (int target) " = allocate (TC_TUPLE, " (int (+ size 1)) ");"))
-      (if top?
+    (define (emit-new-env size depth top? target)
+      (o.write (format "r" (int target) " = allocate (TC_TUPLE, " (int (+ size 2)) ");"))
+      (if (= depth 0)
 	  (o.write (format "top = r" (int target) ";"))))
+
+;;     (define (emit-new-env size depth top? target)
+;;       (cond ((< depth 4)
+;; 	     (o.write (format "r" (int target) " = allocate (TC_TUPLE, " (int (+ size 2)) ");"))
+;; 	     (if (= depth 0)
+;; 		 (o.write (format "top = r" (int target) ";"))))
+;; 	    (else
+;; 	     ;; this new environment is at depth >= 4, so we need to put in the jump pointer.
+;; 	     (o.write (format "r" (int target) " = allocate (TC_TUPLE, " (int (+ size 2)) ");"))
+;; 	     (o.write (format "// compression " (int depth) " " (int size)))
+;; 	     (o.write (format "r" (int target) "[2] = ((object*" (repeat 3 "*") ") lenv) " (repeat 3 "[1]") ";")))))
 
     (define (emit-alloc tag size target)
       (let ((tag-string
@@ -326,7 +350,7 @@
     (define (emit-tail name fun args)
       (let ((goto
 	     (match name with
-	       (maybe:no)	      -> (format "goto *r" (int fun) "[1];")
+	       (maybe:no)	-> (format "goto *r" (int fun) "[1];")
 	       (maybe:yes name) -> (format "goto " (gen-function-label name) ";"))))
 	(if (>= args 0)
 	    (o.write (format "r" (int args) "[1] = r" (int fun) "[2]; lenv = r" (int args) "; " goto))
@@ -382,7 +406,7 @@
 	    (o.write (format "lenv = ((object " (joins (n-of npop "*")) ")lenv)" (joins (n-of npop "[1]")) ";")))
 	(for-range
 	    i nargs
-	    (o.write (format "lenv[" (int (+ 2 i)) "] = r" (int (nth regs i)) ";")))
+	    (o.write (format "lenv[" (int (+ 3 i)) "] = r" (int (nth regs i)) ";")))
 	(o.write (format "goto " (gen-function-label name) ";"))))
 
     (define (emit-push args)
