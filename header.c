@@ -94,8 +94,8 @@ indent (int n)
 typedef struct _tuple2
 {
   header tc;
-  struct _tuple * next;
-  struct _tuple * next8;
+  struct _tuple2 * next;
+  struct _tuple2 * next4;
   object * val[0];
 } pxll_tuple2;
 
@@ -108,6 +108,18 @@ get_lenv_depth (pxll_tuple2 * lenv)
     lenv = lenv->next;
   }
   return count;
+}
+
+void
+check_lenv_links (pxll_tuple2 * lenv)
+{
+  int depth = get_lenv_depth (lenv);
+  while (depth--) {
+    lenv = lenv->next;
+    if ((depth > 4) && ((object*)(lenv->next4) == PXLL_NIL)) {
+      abort();
+    }
+  }
 }
 
 void print_string (object * ob, int quoted);

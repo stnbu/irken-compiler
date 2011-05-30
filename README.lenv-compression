@@ -1,0 +1,16 @@
+This branch experiments with a kind of 'path compression' on lexical
+environments.  It adds an extra slot to each environment tuple, which
+points 4 levels up.  This shrinks the average variable access path,
+but at the cost of maintaining the extra pointers.  Overall it slows
+things down (self-compile as a benchmark) by about 16%, so it's
+probably not worth it.  Some of the overhead could probably shrunk by
+working smarter (for example, adding the 'hop' slot to only every 4th
+rib, and carefully calculating when/where they can be found), but I
+doubt it will be worth the effort.  A much better approach to the
+problem of long environments would be to:
+
+ 1) collapse environments, preferably all the way into the argument list.
+ -or-
+ 2) closure conversion. (no runtime environments at all, but requires a
+   representation for closures).
+

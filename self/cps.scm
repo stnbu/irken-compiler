@@ -16,16 +16,16 @@
   (:test int insn insn cont)                                    ;; <reg> <then> <else> <k>
   (:testcexp (list int) type string insn insn cont)             ;; <regs> <sig> <template> <then> <else> <k>
   (:jump int int)                                               ;; <reg> <target>
-  (:close symbol insn cont)                                     ;; <name> <body> <k>
+  (:close symbol int insn cont)                                 ;; <name> <depth> <body> <k>
   (:varref int int cont)                                        ;; <depth> <index> <k>
   (:varset int int int cont)                                    ;; <depth> <index> <reg> <k>
   (:new-env int int bool cont)	                                ;; <size> <depth> <top?> <k>
   (:alloc tag int cont)                                         ;; <tag> <size> <k>
   (:store int int int int cont)                                 ;; <offset> <arg> <tuple> <i> <k>
-  (:invoke (maybe symbol) int int cont)                         ;; <name> <closure> <args> <k>
-  (:tail (maybe symbol) int int)                                ;; <name> <closure> <args>
+  (:invoke (maybe symbol) int int int cont)                     ;; <name> <closure> <args> <depth> <k>
+  (:tail (maybe symbol) int int int)                            ;; <name> <closure> <args> <depth>
   (:trcall int symbol (list int))                               ;; <depth> <name> <args>
-  (:push int cont)                                              ;; <env>
+  (:push int int cont)			                        ;; <env> <depth>
   (:pop int cont)                                               ;; <result>
   (:primop symbol sexp type (list int) cont)                    ;; <name> <params> <args> <k>
   (:move int int cont)                                          ;; <var> <src> <k>
@@ -229,6 +229,7 @@
       (let ((r
 	     (insn:close
 	      name
+	      (lexical-depth lenv 0)
 	      (compile #t
 		       body
 		       (extend-lenv formals lenv)
@@ -394,6 +395,7 @@
 		   (:top depth _) -> (c-trcall depth name args lenv k)
 		   ))
 	       (let ((gen-invoke (if tail? gen-tail gen-invoke))
+		     (depth (lexical-depth lenv 0))
 		     (name (match fun.t with
 			     (node:varref name)
 			     -> (if (vars-get-flag context name VFLAG-FUNCTION)
@@ -402,7 +404,7 @@
 			     _ -> (maybe:no))))
 		 (define (make-call args-reg)
 		   (compile #f fun lenv (cont (cons args-reg (k/free k))
-					      (lambda (closure-reg) (gen-invoke name closure-reg args-reg k)))))
+					      (lambda (closure-reg) (gen-invoke name closure-reg args-reg depth k)))))
 		 (if (> (length args) 0)
 		     (compile-args args lenv (cont (k/free k) make-call))
 		     (make-call -1))))
@@ -473,6 +475,7 @@
 	       (lambda (tuple-reg)
 		 (insn:push
 		  tuple-reg
+		  depth
 		  (dead free
 			(compile-store-args 0 2 inits tuple-reg
 					    (list:cons tuple-reg free)
@@ -627,11 +630,11 @@
 
     (define (gen-return reg)
       (insn:return reg))
-    (define (gen-invoke name closure-reg args-reg k)
+    (define (gen-invoke name closure-reg args-reg d k)
       (set-flag! VFLAG-ALLOCATES)
-      (insn:invoke name closure-reg args-reg k))
-    (define (gen-tail name closure-reg args-reg k)
-      (insn:tail name closure-reg args-reg))
+      (insn:invoke name closure-reg args-reg d k))
+    (define (gen-tail name closure-reg args-reg d k)
+      (insn:tail name closure-reg args-reg d))
 
     (compile #t exp (cpsenv:nil) (cont '() gen-return))
     ))
@@ -668,21 +671,21 @@
   (define (ps2 x) (print-string x) (print-string " "))
   (match insn with
     (insn:return target)	    -> (begin (newline) (indent d) (ps2 "- ret") (print target))
-    (insn:tail n c a)		    -> (print-line (lambda () (ps2 "tail") (ps n) (ps c) (ps a)) (cont:nil))
+    (insn:tail n c a d)		    -> (print-line (lambda () (ps2 "tail") (ps n) (ps c) (ps a) (ps d)) (cont:nil))
     (insn:trcall d n args)	    -> (print-line (lambda () (ps2 "trcall") (ps d) (ps n) (ps args)) (cont:nil))
     (insn:literal lit k)	    -> (print-line (lambda () (ps2 "lit") (ps2 (literal->string lit))) k)
     (insn:litcon i kind k)          -> (print-line (lambda () (ps2 "litcon") (ps i) (ps kind)) k)
     (insn:cexp sig typ tem args k)  -> (print-line (lambda () (ps2 "cexp") (ps2 (type-repr sig)) (ps2 (type-repr typ)) (ps tem) (ps args)) k)
     (insn:test reg then else k)	    -> (print-line (lambda () (ps2 "test") (print reg) (print-insn then (+ d 1)) (print-insn else (+ d 1))) k)
     (insn:jump reg trg)		    -> (print-line (lambda () (ps2 "jmp") (print trg)) (cont:nil))
-    (insn:close name body k)	    -> (print-line (lambda () (ps2 "close") (print name) (print-insn body (+ d 1))) k)
+    (insn:close name _ body k)      -> (print-line (lambda () (ps2 "close") (print name) (print-insn body (+ d 1))) k)
     (insn:varref d i k)		    -> (print-line (lambda () (ps2 "ref") (ps d) (ps i)) k)
     (insn:varset d i v k)	    -> (print-line (lambda () (ps2 "set") (ps d) (ps i) (ps v)) k)
     (insn:store o a t i k)	    -> (print-line (lambda () (ps2 "stor") (ps o) (ps a) (ps t) (ps i)) k)
-    (insn:invoke n c a k)	    -> (print-line (lambda () (ps2 "invoke") (ps n) (ps c) (ps a)) k)
+    (insn:invoke n c a d k)         -> (print-line (lambda () (ps2 "invoke") (ps n) (ps c) (ps a) (ps d)) k)
     (insn:new-env n d top? k)	    -> (print-line (lambda () (ps2 "env") (ps n) (ps d) (ps top?)) k)
     (insn:alloc tag size k)         -> (print-line (lambda () (ps2 "alloc") (ps tag) (ps size)) k)
-    (insn:push r k)                 -> (print-line (lambda () (ps2 "push") (ps r)) k)
+    (insn:push r d k)               -> (print-line (lambda () (ps2 "push") (ps r) (ps d)) k)
     (insn:pop r k)                  -> (print-line (lambda () (ps2 "pop") (ps r)) k)
     (insn:primop name p t args k)   -> (print-line (lambda () (ps2 "primop") (ps name) (ps2 (repr p)) (ps2 (type-repr t)) (ps args)) k)
     (insn:move var src k)           -> (print-line (lambda () (ps2 "move") (ps var) (ps src)) k)
@@ -723,13 +726,13 @@
 	   (match insn with
 	     ;; no continuation
 	     (insn:return target) -> (cont:nil)
-	     (insn:tail _ _ _)	  -> (cont:nil)
+	     (insn:tail _ _ _ _)  -> (cont:nil)
 	     (insn:trcall _ _ _)  -> (cont:nil)
 	     (insn:jump _ _)	  -> (cont:nil)
 	     (insn:fail _ _)      -> (cont:nil)
 	     ;; these insns contain sub-bodies...
 	     (insn:fatbar _ k0 k1 k)	     -> (begin (walk k0 (+ d 1)) (walk k1 (+ d 1)) k)
-	     (insn:close _ body k)	     -> (begin (walk body (+ d 1)) k)
+	     (insn:close _ _ body k)	     -> (begin (walk body (+ d 1)) k)
 	     (insn:test _ then else k)	     -> (begin (walk then (+ d 1)) (walk else (+ d 1)) k)
 	     (insn:testcexp _ _ _ k0 k1 k)   -> (begin (walk k0 (+ d 1)) (walk k1 (+ d 1)) k)
 	     (insn:nvcase _ _ _ alts ealt k) -> (begin (for-each (lambda (x) (walk x (+ d 1))) alts)
@@ -743,10 +746,10 @@
 	     (insn:varref _ _ k)     -> k
 	     (insn:varset _ _ _ k)   -> k
 	     (insn:store _ _ _ _ k)  -> k
-	     (insn:invoke _ _ _ k)   -> k
+	     (insn:invoke _ _ _ _ k) -> k
 	     (insn:new-env _ _ _ k)  -> k
 	     (insn:alloc _ _ k)	     -> k
-	     (insn:push _ k)	     -> k
+	     (insn:push _ _ k)	     -> k
 	     (insn:pop _ k)	     -> k
 	     (insn:primop _ _ _ _ k) -> k
 	     (insn:move _ _ k)	     -> k

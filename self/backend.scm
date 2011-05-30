@@ -161,16 +161,16 @@
 	 (insn:testcexp regs sig tmpl k0 k1 k)	   -> (begin (emit-testcexp regs sig tmpl k0 k1) k)
 	 (insn:jump reg target)			   -> (begin (emit-jump reg target) (cont:nil))
 	 (insn:cexp sig type template args k)      -> (begin (emit-cexp sig type template args (k/target k)) k)
-	 (insn:close name body k)		   -> (begin (emit-close name body (k/target k)) k)
+	 (insn:close name depth body k)		   -> (begin (emit-close name depth body (k/target k)) k)
 	 (insn:varref d i k)			   -> (begin (emit-varref d i (k/target k)) k)
 	 (insn:varset d i v k)			   -> (begin (emit-varset d i v) k)
 	 (insn:new-env size d top? k)		   -> (begin (emit-new-env size d top? (k/target k)) k)
 	 (insn:alloc tag size k)		   -> (begin (emit-alloc tag size (k/target k)) k)
 	 (insn:store off arg tup i k)		   -> (begin (emit-store off arg tup i) k)
-	 (insn:invoke name fun args k)		   -> (begin (emit-call name fun args k) k)
-	 (insn:tail name fun args)		   -> (begin (emit-tail name fun args) (cont:nil))
+	 (insn:invoke name fun args d k)           -> (begin (emit-call name fun args d k) k)
+	 (insn:tail name fun args d)		   -> (begin (emit-tail name fun args d) (cont:nil))
 	 (insn:trcall d n args)			   -> (begin (emit-trcall d n args) (cont:nil))
-	 (insn:push r k)			   -> (begin (emit-push r) k)
+	 (insn:push r d k)			   -> (begin (emit-push r d) k)
 	 (insn:pop r k)				   -> (begin (emit-pop r (k/target k)) k)
 	 (insn:primop name parm t args k)	   -> (begin (emit-primop name parm t args k) k)
 	 (insn:move dst var k)			   -> (begin (emit-move dst var (k/target k)) k)
@@ -253,7 +253,7 @@
     (define (current-fun-index)
       (nth fun-stack 0))
 
-    (define (emit-close name body target)
+    (define (emit-close name depth body target)
       (let ((proc-label (gen-function-label name))
 	    (jump-label (label-maker)))
 	(PUSH fun-stack fun-counter)
@@ -279,6 +279,8 @@
 	(when context.options.profile
 	      ;; this avoids charging gc to this fun
 	      (o.write "prof_mark0 = rdtsc();"))
+	(if (> depth 4)
+	    (o.write "lenv[2] = ((object ****) lenv)[1][1][1][1];"))
 	(emit body)
 	(pop fun-stack)
 	(o.dedent)
@@ -290,33 +292,35 @@
     (define (make-path n)
       (let loop ((n n)
 		 (path '()))
-	(cond ((= n 0) (format "((object" (repeat (+ (length path) 2) "*") ")lenv)" (joins path)))
-	      ((< n 4) (loop (- n 1) (list:cons "[1]" path)))
+	(cond ((= n 0) (format "((object" (repeat (+ (length path) 2) "*") ")lenv)" (joins (reverse path))))
+	      ((< n 5) (loop (- n 1) (list:cons "[1]" path)))
 	      (else (loop (- n 4) (list:cons "[2]" path))))))
 
     (define (emit-varref d i target)
+;;       (o.write "check_lenv_links (lenv);")
       (if (>= target 0)
 	  (let ((src 
-		 (if (= d -1)
-		     (format "top[" (int (+ 3 i)) "];") ;; the +2 is to skip the header and next ptr
-		     ;;(format "varref (" (int d) "," (int i) ");")
-		     (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]") "[" (int (+ i 3)) "];"))))
-;; 		 (cond ((= d -1)
-;; 			(format "top[" (int (+ 3 i)) "];")) ;; the +3 is to skip the header and next ptrs
-;; 		       (else
-;; 			(let ((f0 (make-path d))
-;; 			      (f1 (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]"))))
-;; 			  (o.write (format "if ((" f0 ") != (" f1 ")) abort();"))
-;; 			  (format f0 "[" (int (+ i 3)) "];")))
-;; 		     )))
+;; 		 (if (= d -1)
+;; 		     (format "top[" (int (+ 3 i)) "];") ;; the +2 is to skip the header and next ptr
+;; 		     ;;(format "varref (" (int d) "," (int i) ");")
+;; 		     (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]") "[" (int (+ i 3)) "];"))))
+		 (cond ((= d -1)
+			(format "top[" (int (+ 3 i)) "];")) ;; the +3 is to skip the header and next ptrs
+		       (else
+			(let ((f0 (make-path d))
+			      (f1 (format "((object*" (repeat (- d  1) "*") ") lenv) " (repeat d "[1]"))))
+			  ;;(o.write (format "if ((" f0 ") != (" f1 ")) abort();"))
+			  (format f0 "[" (int (+ i 3)) "];")))
+		     )))
 	    (o.write (format "r" (int target) " = " src)))))
 
     (define (emit-varset d i v)
       (if (= d -1)
 	  (o.write (format "top[" (int (+ 3 i)) "] = r" (int v) ";"))
 	  ;;(o.write (format "varset (" (int d) ", " (int i) ", r" (int v) ");"))
-	  (o.write (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]") "[" (int (+ i 3)) "] = r" (int v) ";"))
-	  ))
+	  (o.write (format (make-path d) "[" (int (+ i 3)) "] = r" (int v) ";")))
+	  ;;(o.write (format "((object*" (repeat d "*") ") lenv) " (repeat d "[1]") "[" (int (+ i 3)) "] = r" (int v) ";"))
+	  )
 
     (define (emit-new-env size depth top? target)
       (o.write (format "r" (int target) " = allocate (TC_TUPLE, " (int (+ size 2)) ");"))
@@ -324,13 +328,13 @@
 	  (o.write (format "top = r" (int target) ";"))))
 
 ;;     (define (emit-new-env size depth top? target)
+;;       (o.write (format "r" (int target) " = allocate (TC_TUPLE, " (int (+ size 2)) ");"))
+;;       (o.write (format "if (get_lenv_depth (lenv) != " (int depth) ") { abort(); }"))
 ;;       (cond ((< depth 4)
-;; 	     (o.write (format "r" (int target) " = allocate (TC_TUPLE, " (int (+ size 2)) ");"))
 ;; 	     (if (= depth 0)
 ;; 		 (o.write (format "top = r" (int target) ";"))))
 ;; 	    (else
 ;; 	     ;; this new environment is at depth >= 4, so we need to put in the jump pointer.
-;; 	     (o.write (format "r" (int target) " = allocate (TC_TUPLE, " (int (+ size 2)) ");"))
 ;; 	     (o.write (format "// compression " (int depth) " " (int size)))
 ;; 	     (o.write (format "r" (int target) "[2] = ((object*" (repeat 3 "*") ") lenv) " (repeat 3 "[1]") ";")))))
 
@@ -347,17 +351,18 @@
     (define (emit-store off arg tup i)
       (o.write (format "r" (int tup) "[" (int (+ 1 (+ i off))) "] = r" (int arg) ";")))
 
-    (define (emit-tail name fun args)
+    (define (emit-tail name fun args depth)
       (let ((goto
 	     (match name with
 	       (maybe:no)	-> (format "goto *r" (int fun) "[1];")
 	       (maybe:yes name) -> (format "goto " (gen-function-label name) ";"))))
-	(if (>= args 0)
-	    (o.write (format "r" (int args) "[1] = r" (int fun) "[2]; lenv = r" (int args) "; " goto))
-	    (o.write (format "lenv = r" (int fun) "[2]; " goto))
-	    )))
+	(cond ((>= args 0)
+	       (o.write (format "r" (int args) "[1] = r" (int fun) "[2]; lenv = r" (int args) "; " goto)))
+	      (else
+	       (o.write (format "lenv = r" (int fun) "[2]; " goto))))
+	))
 
-    (define (emit-call name fun args k)
+    (define (emit-call name fun args depth k)
       (let ((free (sort < (k/free k))) ;; sorting these might improve things
 	    (return-label (label-maker))
 	    (nregs (length free))
@@ -372,12 +377,12 @@
 	;; call
 	(let ((goto
 	       (match name with
-		 ;; strange - LLVM actually slows down if I jump to a known label.
 		 (maybe:no)	-> (format "goto *r" (int fun) "[1];")
 		 (maybe:yes name) -> (format "goto " (gen-function-label name) ";"))))
-	  (if (>= args 0)
-	      (o.write (format "r" (int args) "[1] = r" (int fun) "[2]; lenv = r" (int args) "; " goto))
-	      (o.write (format "lenv = r" (int fun) "[2]; " goto))))
+	  (cond ((>= args 0)
+		 (o.write (format "r" (int args) "[1] = r" (int fun) "[2]; lenv = r" (int args) "; " goto)))
+		(else
+		 (o.write (format "lenv = r" (int fun) "[2]; " goto)))))
 	;; label
 	(o.write (format return-label ":"))
 	;; profile
@@ -403,14 +408,29 @@
 	    ;; a zero-arg trcall needs an extra level of pop
 	    (set! npop (+ npop 1)))
 	(if (> npop 0)
-	    (o.write (format "lenv = ((object " (joins (n-of npop "*")) ")lenv)" (joins (n-of npop "[1]")) ";")))
+	    (o.write (format "lenv = ((object " (repeat npop "*") ")lenv)" (repeat npop "[1]") ";")))
 	(for-range
 	    i nargs
 	    (o.write (format "lenv[" (int (+ 3 i)) "] = r" (int (nth regs i)) ";")))
 	(o.write (format "goto " (gen-function-label name) ";"))))
 
-    (define (emit-push args)
-      (o.write (format "r" (int args) "[1] = lenv; lenv = r" (int args) ";")))
+    ;; there are exactly *two* points where an environment is extended.
+    ;; 1) insn:push - in other words, a <let> expression.
+    ;; 2) insn:invoke/tail - function is called with arguments (this doesn't apply to tail-recursive calls).
+    ;; now, doing the 'hops' is a little confusing in the second case because the *current*
+    ;;   lenv is *irrelevant*, and therefore its depth means nothing to us.  It is the
+    ;;   *function's* lenv that will be extending and only *its* depth matters.  This means
+    ;;   we need to check for hops at the top of every function.
+
+    (define (emit-push args-reg depth)
+      (when (> depth 3)
+	    ;; this new environment is at depth >= 4, so we need to put in the jump pointer.
+	    ;;(o.write (format "// compression " (int depth)))
+	    ;;(o.write (format "fprintf (stderr, \" " (int depth) "\");"))
+	    (o.write (format "r" (int args-reg) "[2] = ((object****)lenv)[1][1][1];"))
+	    )
+      (o.write (format "r" (int args-reg) "[1] = lenv; lenv = r" (int args-reg) ";"))
+      )
 
     (define (emit-pop src target)
       (o.write (format "lenv = lenv[1];"))
