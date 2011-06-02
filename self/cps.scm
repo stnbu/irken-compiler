@@ -9,30 +9,31 @@
 
 ;; RTL instructions
 (datatype insn
-  (:return int)                                                 ;; return register
-  (:literal literal cont)                                       ;; <value> <k>
-  (:litcon int symbol cont)                                     ;; <index> <value> <k>
-  (:cexp type type string (list int) cont)                      ;; <sig> <solved-type> <template> <args> <k>
-  (:test int insn insn cont)                                    ;; <reg> <then> <else> <k>
-  (:testcexp (list int) type string insn insn cont)             ;; <regs> <sig> <template> <then> <else> <k>
-  (:jump int int)                                               ;; <reg> <target>
-  (:close symbol insn cont)                                     ;; <name> <body> <k>
-  (:varref int int cont)                                        ;; <depth> <index> <k>
-  (:varset int int int cont)                                    ;; <depth> <index> <reg> <k>
-  (:new-env int bool cont)	                                ;; <size> <top?> <k>
-  (:alloc tag int cont)                                         ;; <tag> <size> <k>
-  (:store int int int int cont)                                 ;; <offset> <arg> <tuple> <i> <k>
-  (:invoke (maybe symbol) int int cont)                         ;; <name> <closure> <args> <k>
-  (:tail (maybe symbol) int int)                                ;; <name> <closure> <args>
-  (:trcall int symbol (list int))                               ;; <depth> <name> <args>
-  (:push int cont)                                              ;; <env>
-  (:pop int cont)                                               ;; <result>
-  (:primop symbol sexp type (list int) cont)                    ;; <name> <params> <args> <k>
-  (:move int int cont)                                          ;; <var> <src> <k>
-  (:fatbar int insn insn cont)                                  ;; <label> <alt0> <alt1> <k>
-  (:fail int int)                                               ;; <label> <npop>
-  (:nvcase int symbol (list symbol) (list insn) (maybe insn) cont)      ;; <reg> <dt> <tags> <alts> <ealt> <k>
-  (:pvcase int (list symbol) (list int) (list insn) (maybe insn) cont)  ;; <reg> <tags> <arities> <ealt> <k>
+  (:return int)                                         ;; return register
+  (:literal literal cont)                               ;; value k
+  (:litcon int symbol cont)                             ;; index value k
+  (:cexp type type string (list int) cont)              ;; sig solved-type template args k
+  (:test int insn insn cont)                            ;; reg then else k
+  (:testcexp (list int) type string insn insn cont)	;; regs sig template then else k
+  (:jump int int)                                       ;; reg target
+  (:close symbol int insn cont)                         ;; name arity body k
+  (:varref int int cont)                                ;; depth index k
+  (:varset int int int cont)                            ;; depth index reg k
+  (:new-env int bool cont)	                        ;; size top? k
+  (:new-env0 int bool cont)				;; size-reg top? k
+  (:alloc tag int cont)                                 ;; tag size k
+  (:store int int int int cont)                         ;; offset arg tuple i k
+  (:invoke (maybe symbol) int int cont)                 ;; name closure args k
+  (:tail (maybe symbol) int int)                        ;; name closure args
+  (:trcall int symbol (list int))                       ;; depth name args
+  (:push int cont)                                      ;; env
+  (:pop int cont)                                       ;; result
+  (:primop symbol sexp type (list int) cont)            ;; name params args k
+  (:move int int cont)                                  ;; var src k
+  (:fatbar int insn insn cont)                          ;; label alt0 alt1 k
+  (:fail int int)                                       ;; label npop
+  (:nvcase int symbol (list symbol) (list insn) (maybe insn) cont)      ;; reg dt tags alts ealt k
+  (:pvcase int (list symbol) (list int) (list insn) (maybe insn) cont)  ;; reg tags arities ealt k
   )
 
 ;; continuation
@@ -229,6 +230,7 @@
       (let ((r
 	     (insn:close
 	      name
+	      (length formals)
 	      (compile #t
 		       body
 		       (extend-lenv formals lenv)
@@ -356,14 +358,6 @@
       (collect-primargs args lenv k
 			(lambda (regs) (insn:primop op parm type regs k))))
 
-    (define (safe-for-let-reg exp names context)
-      (and (node-get-flag exp NFLAG-LEAF)
-	   (< (length names) 5)
-	   (not (some?
-		 (lambda (name)
-		   (vars-get-flag context name VFLAG-ESCAPES))
-		 names))))
-
     (define (safe-for-tr-call exp fun)
       (match fun with
 	(node:varref name)
@@ -378,37 +372,81 @@
 
     (define (c-call tail? exp lenv k)
       (match exp.subs with
-	(fun . args)
-	-> (if (and tail? (safe-for-tr-call exp fun.t))
-	       (let ((name (varref->name fun.t)))
+	(rator . rands)
+	-> (if (and tail? (safe-for-tr-call exp rator.t))
+	       (let ((name (varref->name rator.t)))
 		 (match (lexical-address name 0 lenv) with
-		   (:reg _) -> (error "c-call function in register?")
-		   (:pair depth _) -> (c-trcall depth name args lenv k)
-		   (:top depth _) -> (c-trcall depth name args lenv k)
+		   (:reg _)	   -> (error "c-call function in register?")
+		   (:pair depth _) -> (c-trcall depth name rands lenv k)
+		   (:top depth _)  -> (c-trcall depth name rands lenv k)
 		   ))
-	       (let ((gen-invoke (if tail? gen-tail gen-invoke))
-		     (name (match fun.t with
-			     (node:varref name)
-			     -> (if (vars-get-flag context name VFLAG-FUNCTION)
-				    (maybe:yes name)
-				    (maybe:no))
-			     _ -> (maybe:no))))
-		 (define (make-call args-reg)
-		   (compile #f fun lenv (cont (cons args-reg (k/free k))
-					      (lambda (closure-reg) (gen-invoke name closure-reg args-reg k)))))
-		 (if (> (length args) 0)
-		     (compile-args args lenv (cont (k/free k) make-call))
-		     (make-call -1))))
-	() -> (error "c-call: no function?")
-	))
+	       (match rator.t with
+		 (node:varref name)
+		 -> (match (lookup-function name context) with
+		      (maybe:no)      -> (c-call-unknown tail? rator rands lenv k)
+		      (maybe:yes fun) -> (c-call-known tail? name fun rator rands lenv k))
+		 _ -> (c-call-unknown tail? rator rands lenv k)))
+	() -> (raise (:ErrorNoFunction))))
 
-    (define (compile-args args lenv k)
+;;     (define (c-call-unknown tail? rator rands lenv k)
+;;       (let ((kfree (k/free k)))
+;; 	(define (make-env closure-reg)
+;; 	  (define (make-call args-reg)
+;; 	    (gen-invoke (maybe:no) closure-reg args-reg k))
+;; 	  (define (store-args args-reg)
+;; 	    (if (> (length rands) 0)
+;; 		(compile-store-args 0 1 rands args-reg
+;; 				    (cons args-reg (cons closure-reg kfree))
+;; 				    lenv
+;; 				    (cont (cons args-reg (cons closure-reg kfree)) make-call))
+;; 		(make-call args-reg)))
+;; 	  (insn:new-env0 closure-reg (lenv-top? lenv)
+;; 			 (cont (cons closure-reg kfree) store-args)))
+;; 	(compile #f rator lenv (cont kfree make-env))))
+
+    (define (c-call-unknown tail? rator rands lenv k)
+      (let ((kfree (k/free k))
+	    (top? (lenv-top? lenv)))
+	(compile
+	 #f rator lenv
+	 (cont kfree
+	       (lambda (closure-reg)
+		 (insn:new-env0
+		  closure-reg top?
+		  (cont (cons closure-reg kfree)
+			(lambda (args-reg)
+			  (define (make-call ignore)
+			    (gen-invoke (maybe:no) closure-reg args-reg k))
+			  (if (> (length rands) 0)
+			      (let ((kfree0 (cons args-reg (cons closure-reg kfree))))
+				(compile-store-args
+				 0 1 rands args-reg kfree0 lenv
+				 (cont kfree0 make-call)))
+			      (make-call args-reg))))))))))
+
+    (define (c-call-known tail? name fun rator rands lenv k)
+      (match fun.t with
+	(node:function _ formals)
+	-> (let ((nargs (length rands))
+		 (env-size (length formals))
+		 (gen-invoke (if tail? gen-tail gen-invoke)))
+	     (define (make-call args-reg)
+	       (compile #f rator lenv
+			(cont (cons args-reg (k/free k))
+			      (lambda (closure-reg)
+				(gen-invoke (maybe:yes name) closure-reg args-reg k)))))
+	     (if (and (= env-size 0) (= nargs 0)) ;; do we skip <new-env>?
+		 (make-call -1)
+		 (compile-args rands env-size lenv (cont (k/free k) make-call))))
+	_ -> (impossible)))
+
+    (define (compile-args args size lenv k)
       (set-flag! VFLAG-ALLOCATES)
       (match args with
-	() -> (insn:new-env 0 (lenv-top? lenv) k)
+	() -> (insn:new-env size (lenv-top? lenv) k)
 	_  -> (let ((nargs (length args)))
 		(insn:new-env
-		 nargs
+		 size
 		 (lenv-top? lenv)
 		 (cont (k/free k)
 		       (lambda (tuple-reg)
@@ -666,12 +704,13 @@
     (insn:cexp sig typ tem args k)  -> (print-line (lambda () (ps2 "cexp") (ps2 (type-repr sig)) (ps2 (type-repr typ)) (ps tem) (ps args)) k)
     (insn:test reg then else k)	    -> (print-line (lambda () (ps2 "test") (print reg) (print-insn then (+ d 1)) (print-insn else (+ d 1))) k)
     (insn:jump reg trg)		    -> (print-line (lambda () (ps2 "jmp") (print trg)) (cont:nil))
-    (insn:close name body k)	    -> (print-line (lambda () (ps2 "close") (print name) (print-insn body (+ d 1))) k)
+    (insn:close name arity body k)  -> (print-line (lambda () (ps2 "close") (ps name) (ps arity) (print-insn body (+ d 1))) k)
     (insn:varref d i k)		    -> (print-line (lambda () (ps2 "ref") (ps d) (ps i)) k)
     (insn:varset d i v k)	    -> (print-line (lambda () (ps2 "set") (ps d) (ps i) (ps v)) k)
     (insn:store o a t i k)	    -> (print-line (lambda () (ps2 "stor") (ps o) (ps a) (ps t) (ps i)) k)
     (insn:invoke n c a k)	    -> (print-line (lambda () (ps2 "invoke") (ps n) (ps c) (ps a)) k)
     (insn:new-env n top? k)	    -> (print-line (lambda () (ps2 "env") (ps n) (ps top?)) k)
+    (insn:new-env0 n top? k)	    -> (print-line (lambda () (ps2 "env0") (ps n) (ps top?)) k)
     (insn:alloc tag size k)         -> (print-line (lambda () (ps2 "alloc") (ps tag) (ps size)) k)
     (insn:push r k)                 -> (print-line (lambda () (ps2 "push") (ps r)) k)
     (insn:pop r k)                  -> (print-line (lambda () (ps2 "pop") (ps r)) k)
@@ -720,7 +759,7 @@
 	     (insn:fail _ _)      -> (cont:nil)
 	     ;; these insns contain sub-bodies...
 	     (insn:fatbar _ k0 k1 k)	     -> (begin (walk k0 (+ d 1)) (walk k1 (+ d 1)) k)
-	     (insn:close _ body k)	     -> (begin (walk body (+ d 1)) k)
+	     (insn:close _ _ body k)	     -> (begin (walk body (+ d 1)) k)
 	     (insn:test _ then else k)	     -> (begin (walk then (+ d 1)) (walk else (+ d 1)) k)
 	     (insn:testcexp _ _ _ k0 k1 k)   -> (begin (walk k0 (+ d 1)) (walk k1 (+ d 1)) k)
 	     (insn:nvcase _ _ _ alts ealt k) -> (begin (for-each (lambda (x) (walk x (+ d 1))) alts)
@@ -736,6 +775,7 @@
 	     (insn:store _ _ _ _ k)  -> k
 	     (insn:invoke _ _ _ k)   -> k
 	     (insn:new-env _ _ k)    -> k
+	     (insn:new-env0 _ _ k)   -> k
 	     (insn:alloc _ _ k)	     -> k
 	     (insn:push _ k)	     -> k
 	     (insn:pop _ k)	     -> k

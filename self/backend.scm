@@ -161,10 +161,11 @@
 	 (insn:testcexp regs sig tmpl k0 k1 k)	   -> (begin (emit-testcexp regs sig tmpl k0 k1) k)
 	 (insn:jump reg target)			   -> (begin (emit-jump reg target) (cont:nil))
 	 (insn:cexp sig type template args k)      -> (begin (emit-cexp sig type template args (k/target k)) k)
-	 (insn:close name body k)		   -> (begin (emit-close name body (k/target k)) k)
+	 (insn:close name arity body k)		   -> (begin (emit-close name arity body (k/target k)) k)
 	 (insn:varref d i k)			   -> (begin (emit-varref d i (k/target k)) k)
 	 (insn:varset d i v k)			   -> (begin (emit-varset d i v) k)
 	 (insn:new-env size top? k)		   -> (begin (emit-new-env size top? (k/target k)) k)
+	 (insn:new-env0 size-reg top? k)           -> (begin (emit-new-env0 size-reg top? (k/target k)) k)
 	 (insn:alloc tag size k)		   -> (begin (emit-alloc tag size (k/target k)) k)
 	 (insn:store off arg tup i k)		   -> (begin (emit-store off arg tup i) k)
 	 (insn:invoke name fun args k)		   -> (begin (emit-call name fun args k) k)
@@ -253,7 +254,7 @@
     (define (current-fun-index)
       (nth fun-stack 0))
 
-    (define (emit-close name body target)
+    (define (emit-close name arity body target)
       (let ((proc-label (gen-function-label name))
 	    (jump-label (label-maker)))
 	(PUSH fun-stack fun-counter)
@@ -284,8 +285,9 @@
 	(pop fun-stack)
 	(o.dedent)
 	(o.write (format jump-label ":"))
-	(o.write (format "r" (int target) " = allocate (TC_CLOSURE, 2);"))
-	(o.write (format "r" (int target) "[1] = &&" proc-label "; r" (int target) "[2] = lenv;"))
+	(o.write (format "r" (int target) " = allocate (TC_CLOSURE, 3);"))
+	(o.write (format "r" (int target) "[1] = &&" proc-label "; r" (int target) "[3] = lenv;"))
+	(o.write (format "r" (int target) "[2] = " (int arity) ";"))
 	))
 
     (define (emit-varref d i target)
@@ -310,6 +312,12 @@
       (if top?
 	  (o.write (format "top = r" (int target) ";"))))
 
+    (define (emit-new-env0 closure-reg top? target)
+      (o.write "// new-env0 !")
+      (o.write (format "r" (int target) " = allocate (TC_TUPLE, (((pxll_closure*)r" (int closure-reg) ")->arity)+1);"))
+      (if top?
+	  (o.write (format "top = r" (int target) ";"))))
+
     (define (emit-alloc tag size target)
       (let ((tag-string
 	     (match tag with
@@ -329,8 +337,8 @@
 	       (maybe:no)	      -> (format "goto *r" (int fun) "[1];")
 	       (maybe:yes name) -> (format "goto " (gen-function-label name) ";"))))
 	(if (>= args 0)
-	    (o.write (format "r" (int args) "[1] = r" (int fun) "[2]; lenv = r" (int args) "; " goto))
-	    (o.write (format "lenv = r" (int fun) "[2]; " goto))
+	    (o.write (format "r" (int args) "[1] = r" (int fun) "[3]; lenv = r" (int args) "; " goto))
+	    (o.write (format "lenv = r" (int fun) "[3]; " goto))
 	    )))
 
     (define (emit-call name fun args k)
@@ -352,8 +360,8 @@
 		 (maybe:no)	-> (format "goto *r" (int fun) "[1];")
 		 (maybe:yes name) -> (format "goto " (gen-function-label name) ";"))))
 	  (if (>= args 0)
-	      (o.write (format "r" (int args) "[1] = r" (int fun) "[2]; lenv = r" (int args) "; " goto))
-	      (o.write (format "lenv = r" (int fun) "[2]; " goto))))
+	      (o.write (format "r" (int args) "[1] = r" (int fun) "[3]; lenv = r" (int args) "; " goto))
+	      (o.write (format "lenv = r" (int fun) "[3]; " goto))))
 	;; label
 	(o.write (format return-label ":"))
 	;; profile

@@ -1,13 +1,5 @@
 ;; -*- Mode: Irken -*-
 
-;;; where to store properties?
-;;; Some properties belong to the node itself.  For example, a RECURSIVE
-;;;   flag can apply to a particular call, but not all of them.
-;;; Other properties belong to a variable or a function - for example a
-;;;   function can also be RECURSIVE.  But the property of escaping belongs
-;;;   to the function/variable, not to a particular node - although you could
-;;;   fake it by attaching it to the definition of the function/variable.
-;;;
 ;; XXX consider combining these passes
 
 (define (find-recursion exp context)
@@ -38,6 +30,9 @@
     (for-each (lambda (x) (walk x fenv)) exp.subs))
   
   (walk exp '()))
+
+(define (lookup-function name context)
+  (tree/member context.funs symbol-index<? name))
 
 (define (find-leaves node)
   (define (search exp)
@@ -298,7 +293,9 @@
       (walk body))
 
     ;; body of do-inlining
-    (inline root (tree/empty))
+    (if context.options.inline
+	(inline root (tree/empty))
+	root)
     ))
 
 (define (escape-analysis root context)

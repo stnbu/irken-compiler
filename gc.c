@@ -79,6 +79,7 @@ do_gc (int nroots)
       case TC_CLOSURE:
 	// closure = { tag, pc, lenv }
 	p++;			// skip pc
+	p++;			// skip arity
 	*p = copy (p); p++;	// lenv
 	scan += 3;
 	break;
@@ -208,6 +209,7 @@ gc_relocate (int nroots, object * start, object * finish, pxll_int delta)
     case TC_CLOSURE:
       // { tag, pc, lenv }
       p++; // skip pc (XXX: actually, pc will have its own adjustment)
+      p++; // skip arity
       adjust (p, delta);
       scan += length+1;
       break;

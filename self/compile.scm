@@ -1,6 +1,7 @@
 ;; -*- Mode: Irken -*-
 
 (include "self/backend.scm")
+(include "self/after-typing.scm")
 
 (define (find-base path)
   (let ((parts (string-split path #\.))
@@ -62,6 +63,8 @@
 	;; this option only applies to the C compilation phase.
 	"-O" -> (set! options.optimize #t)
 	"-p" -> (set! options.profile #t)
+	"-nl" -> (set! options.nolet #t)
+	"-ni" -> (set! options.inline #f)
 	_ -> #u)))
 
 (define (usage)
@@ -74,6 +77,8 @@ Usage: compile <irken-src-file> [options]
  -m : debug macro expansion
  -O : tell gcc to optimize
  -p : generate profile-printing code
+ -nl : no lets
+ -ni : no inline
 "))
 
 (defmacro verbose
@@ -111,8 +116,9 @@ Usage: compile <irken-src-file> [options]
 	;; try to free up some memory
 	(_ (set! node0 (node/sequence '())))
 	(_ (set! node1 (node/sequence '())))
-	(_ (set! node2 (node/sequence '())))	
-	(_ (set! context.funs (tree/empty)))
+	(_ (set! node2 (node/sequence '())))
+	;; now needed in cps.scm
+	;;(_ (set! context.funs (tree/empty)))
 	(_ (find-leaves noden))
 	(_ (verbose (print-string "after second round:\n") (pp-node noden)))
 	;; rebuild the graph yet again, so strongly will work.
@@ -126,6 +132,13 @@ Usage: compile <irken-src-file> [options]
 	(_ (print-string "typing...\n"))
 	(type0 (type-program noden context))
 	(_ (verbose (print-string "\n-- after typing --\n") (pp-node noden) (newline)))
+	;; Note: mutates node tree.
+	(_ (when context.options.nolet
+		 (print-string "\n-- REMOVING LETS --\n")
+		 (remove-lets noden context)
+		 (pp-node noden)
+		 (newline)
+		 #u))
 	(_ (print-string "cps...\n"))
 	(cps (compile noden context))
 	(_ (set! noden (node/sequence '()))) ;; go easier on memory

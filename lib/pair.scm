@@ -57,6 +57,10 @@
 (define (append list1 list2)
   (reverse-onto (reverse list1) list2))
 
+(define append1
+  ()        x -> (list:cons x (list:nil))
+  (hd . tl) x -> (list:cons hd (append1 tl x)))
+
 (define (length l)
   (define fun
     () acc	  -> acc

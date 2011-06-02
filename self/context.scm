@@ -8,6 +8,8 @@
    trace=#f
    debugmacroexpansion=#f
    profile=#f
+   nolet=#f
+   inline=#t
    })
 
 (define (make-context)

@@ -146,6 +146,7 @@ typedef struct _vector {
 typedef struct _closure {
   header tc;
   void * pc;
+  int arity;
   pxll_tuple * lenv;
 } pxll_closure;
 
